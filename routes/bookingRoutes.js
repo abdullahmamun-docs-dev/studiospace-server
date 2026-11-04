@@ -1,4 +1,3 @@
-
 import express from "express";
 import { ObjectId } from "mongodb";
 
@@ -81,7 +80,48 @@ router.post("/", async (req, res) => {
       });
     }
 
-    const bookingDate = new Date(`${date}T${startTime}:00`);
+    // Strict YYYY-MM-DD and HH:mm validation.
+    const dateMatch =
+      /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(date);
+
+    const timePattern =
+      /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/;
+
+    if (
+      !dateMatch ||
+      !timePattern.test(startTime) ||
+      !timePattern.test(endTime)
+    ) {
+      return res.status(400).json({
+        message:
+          "Date must use YYYY-MM-DD and time must use HH:mm format.",
+      });
+    }
+
+    const [, yearText, monthText, dayText] = dateMatch;
+
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+
+    const dateCheck = new Date(
+      Date.UTC(year, month - 1, day)
+    );
+
+    // Reject impossible dates such as 2026-02-31.
+    if (
+      dateCheck.getUTCFullYear() !== year ||
+      dateCheck.getUTCMonth() !== month - 1 ||
+      dateCheck.getUTCDate() !== day
+    ) {
+      return res.status(400).json({
+        message: "Invalid booking date.",
+      });
+    }
+
+    const bookingDate = new Date(
+      `${date}T${startTime}:00`
+    );
 
     if (Number.isNaN(bookingDate.getTime())) {
       return res.status(400).json({
@@ -95,25 +135,31 @@ router.post("/", async (req, res) => {
       });
     }
 
-    const [startHour, startMinute] = startTime.split(":").map(Number);
-    const [endHour, endMinute] = endTime.split(":").map(Number);
+    const [startHour, startMinute] =
+      startTime.split(":").map(Number);
 
-    const startMinutes = startHour * 60 + startMinute;
-    const endMinutes = endHour * 60 + endMinute;
+    const [endHour, endMinute] =
+      endTime.split(":").map(Number);
 
-    if (
-      !Number.isFinite(startMinutes) ||
-      !Number.isFinite(endMinutes) ||
-      endMinutes <= startMinutes
-    ) {
+    const startMinutes =
+      startHour * 60 + startMinute;
+
+    const endMinutes =
+      endHour * 60 + endMinute;
+
+    if (endMinutes <= startMinutes) {
       return res.status(400).json({
         message: "End time must be later than start time.",
       });
     }
 
-    const calculatedHours = (endMinutes - startMinutes) / 60;
+    const calculatedHours =
+      (endMinutes - startMinutes) / 60;
 
-    if (!Number.isFinite(calculatedHours) || calculatedHours <= 0) {
+    if (
+      !Number.isFinite(calculatedHours) ||
+      calculatedHours <= 0
+    ) {
       return res.status(400).json({
         message: "Invalid booking duration.",
       });
@@ -121,14 +167,13 @@ router.post("/", async (req, res) => {
 
     const db = await connectDB();
 
-    const studiosCollection = db.collection("studios");
-    const bookingsCollection = db.collection("bookings");
+    const studiosCollection =
+      db.collection("studios");
 
-    /*
-    |--------------------------------------------------------------------------
-    | Find studio
-    |--------------------------------------------------------------------------
-    */
+    const bookingsCollection =
+      db.collection("bookings");
+
+    // Find studio.
     const studio = await studiosCollection.findOne({
       _id: new ObjectId(studioId),
     });
@@ -139,11 +184,7 @@ router.post("/", async (req, res) => {
       });
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Prevent booking own studio
-    |--------------------------------------------------------------------------
-    */
+    // Prevent booking own studio.
     const isOwnStudio =
       (studio.hostEmail &&
         user.email &&
@@ -158,15 +199,12 @@ router.post("/", async (req, res) => {
       });
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Capacity
-    |--------------------------------------------------------------------------
-    */
+    // Capacity validation.
     const storedCapacity = Number(studio.maxCapacity);
 
     const maxCapacity =
-      Number.isInteger(storedCapacity) && storedCapacity > 0
+      Number.isInteger(storedCapacity) &&
+      storedCapacity > 0
         ? storedCapacity
         : 10;
 
@@ -176,69 +214,58 @@ router.post("/", async (req, res) => {
       });
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Hourly price
-    |--------------------------------------------------------------------------
-    |
-    | Support both:
-    |   pricePerHour
-    |   price
-    |
-    | pricePerHour has priority.
-    |--------------------------------------------------------------------------
-    */
+    // Hourly price.
     const rawPrice =
       studio.pricePerHour ?? studio.price ?? 0;
 
     const pricePerHour = Number(rawPrice);
 
-    if (!Number.isFinite(pricePerHour) || pricePerHour <= 0) {
+    if (
+      !Number.isFinite(pricePerHour) ||
+      pricePerHour <= 0
+    ) {
       return res.status(400).json({
         message:
           "This studio does not have a valid hourly price.",
       });
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Security deposit
-    |--------------------------------------------------------------------------
-    */
+    // Security deposit.
     const securityDeposit = Math.max(
       0,
       Number(studio.securityDeposit) || 0
     );
 
-    /*
-    |--------------------------------------------------------------------------
-    | Calculate booking price on the server
-    |--------------------------------------------------------------------------
-    */
+    // Calculate booking price on the server.
     const totalPrice =
-      Math.round(calculatedHours * pricePerHour * 100) / 100;
+      Math.round(
+        calculatedHours * pricePerHour * 100
+      ) / 100;
 
     const totalAmount =
-      Math.round((totalPrice + securityDeposit) * 100) / 100;
+      Math.round(
+        (totalPrice + securityDeposit) * 100
+      ) / 100;
 
     /*
     |--------------------------------------------------------------------------
-    | Prevent double booking
+    | Prevent overlapping bookings
     |--------------------------------------------------------------------------
     */
-    const existingBooking = await bookingsCollection.findOne({
-      studioId: new ObjectId(studioId),
-      date,
-      status: {
-        $in: ["pending", "confirmed"],
-      },
-      startTime: {
-        $lt: endTime,
-      },
-      endTime: {
-        $gt: startTime,
-      },
-    });
+    const existingBooking =
+      await bookingsCollection.findOne({
+        studioId: new ObjectId(studioId),
+        date,
+        status: {
+          $in: ["pending", "confirmed"],
+        },
+        startTime: {
+          $lt: endTime,
+        },
+        endTime: {
+          $gt: startTime,
+        },
+      });
 
     if (existingBooking) {
       return res.status(409).json({
@@ -247,15 +274,12 @@ router.post("/", async (req, res) => {
       });
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Create booking
-    |--------------------------------------------------------------------------
-    */
+    // Create booking.
     const booking = {
       studioId: new ObjectId(studioId),
 
-      studioName: studio.name || studioName || "Studio",
+      studioName:
+        studio.name || studioName || "Studio",
 
       hostId: studio.hostId || null,
       hostEmail: studio.hostEmail || null,
@@ -272,13 +296,13 @@ router.post("/", async (req, res) => {
 
       totalHours: calculatedHours,
 
-      // Studio rental price only
+      // Studio rental price only.
       price: totalPrice,
 
-      // Security deposit
+      // Security deposit.
       deposit: securityDeposit,
 
-      // Final amount
+      // Final amount.
       totalAmount,
 
       status: "pending",
@@ -287,7 +311,8 @@ router.post("/", async (req, res) => {
       updatedAt: new Date(),
     };
 
-    const result = await bookingsCollection.insertOne(booking);
+    const result =
+      await bookingsCollection.insertOne(booking);
 
     return res.status(201).json({
       message: "Booking created successfully.",
@@ -300,7 +325,8 @@ router.post("/", async (req, res) => {
     console.error("Create booking error:", error);
 
     return res.status(500).json({
-      message: "Something went wrong while creating a booking.",
+      message:
+        "Something went wrong while creating a booking.",
     });
   }
 });
@@ -417,7 +443,9 @@ router.patch("/:id/confirm", async (req, res) => {
     }
 
     const db = await connectDB();
-    const bookingsCollection = db.collection("bookings");
+
+    const bookingsCollection =
+      db.collection("bookings");
 
     const booking = await bookingsCollection.findOne({
       _id: new ObjectId(id),
@@ -430,32 +458,45 @@ router.patch("/:id/confirm", async (req, res) => {
     }
 
     const isHost =
-      String(booking.hostId) === String(user.id || user._id) ||
+      String(booking.hostId) ===
+        String(user.id || user._id) ||
       booking.hostEmail === user.email;
 
     if (!isHost) {
       return res.status(403).json({
-        message: "You can only manage bookings for your own studios.",
+        message:
+          "You can only manage bookings for your own studios.",
       });
     }
 
     if (booking.status !== "pending") {
       return res.status(400).json({
-        message: "Only pending bookings can be confirmed.",
+        message:
+          "Only pending bookings can be confirmed.",
       });
     }
 
-    await bookingsCollection.updateOne(
-      {
-        _id: new ObjectId(id),
-      },
-      {
-        $set: {
-          status: "confirmed",
-          updatedAt: new Date(),
+    // Atomic status update.
+    const updateResult =
+      await bookingsCollection.updateOne(
+        {
+          _id: new ObjectId(id),
+          status: "pending",
         },
-      }
-    );
+        {
+          $set: {
+            status: "confirmed",
+            updatedAt: new Date(),
+          },
+        }
+      );
+
+    if (updateResult.modifiedCount !== 1) {
+      return res.status(409).json({
+        message:
+          "This booking has already been updated. Please refresh and try again.",
+      });
+    }
 
     return res.status(200).json({
       message: "Booking confirmed successfully.",
@@ -493,7 +534,9 @@ router.patch("/:id/reject", async (req, res) => {
     }
 
     const db = await connectDB();
-    const bookingsCollection = db.collection("bookings");
+
+    const bookingsCollection =
+      db.collection("bookings");
 
     const booking = await bookingsCollection.findOne({
       _id: new ObjectId(id),
@@ -506,32 +549,45 @@ router.patch("/:id/reject", async (req, res) => {
     }
 
     const isHost =
-      String(booking.hostId) === String(user.id || user._id) ||
+      String(booking.hostId) ===
+        String(user.id || user._id) ||
       booking.hostEmail === user.email;
 
     if (!isHost) {
       return res.status(403).json({
-        message: "You can only manage bookings for your own studios.",
+        message:
+          "You can only manage bookings for your own studios.",
       });
     }
 
     if (booking.status !== "pending") {
       return res.status(400).json({
-        message: "Only pending bookings can be rejected.",
+        message:
+          "Only pending bookings can be rejected.",
       });
     }
 
-    await bookingsCollection.updateOne(
-      {
-        _id: new ObjectId(id),
-      },
-      {
-        $set: {
-          status: "cancelled",
-          updatedAt: new Date(),
+    // Atomic status update.
+    const updateResult =
+      await bookingsCollection.updateOne(
+        {
+          _id: new ObjectId(id),
+          status: "pending",
         },
-      }
-    );
+        {
+          $set: {
+            status: "cancelled",
+            updatedAt: new Date(),
+          },
+        }
+      );
+
+    if (updateResult.modifiedCount !== 1) {
+      return res.status(409).json({
+        message:
+          "This booking has already been updated. Please refresh and try again.",
+      });
+    }
 
     return res.status(200).json({
       message: "Booking rejected successfully.",
@@ -569,7 +625,9 @@ router.patch("/:id/complete", async (req, res) => {
     }
 
     const db = await connectDB();
-    const bookingsCollection = db.collection("bookings");
+
+    const bookingsCollection =
+      db.collection("bookings");
 
     const booking = await bookingsCollection.findOne({
       _id: new ObjectId(id),
@@ -582,32 +640,45 @@ router.patch("/:id/complete", async (req, res) => {
     }
 
     const isHost =
-      String(booking.hostId) === String(user.id || user._id) ||
+      String(booking.hostId) ===
+        String(user.id || user._id) ||
       booking.hostEmail === user.email;
 
     if (!isHost) {
       return res.status(403).json({
-        message: "You can only manage bookings for your own studios.",
+        message:
+          "You can only manage bookings for your own studios.",
       });
     }
 
     if (booking.status !== "confirmed") {
       return res.status(400).json({
-        message: "Only confirmed bookings can be completed.",
+        message:
+          "Only confirmed bookings can be completed.",
       });
     }
 
-    await bookingsCollection.updateOne(
-      {
-        _id: new ObjectId(id),
-      },
-      {
-        $set: {
-          status: "completed",
-          updatedAt: new Date(),
+    // Atomic status update.
+    const updateResult =
+      await bookingsCollection.updateOne(
+        {
+          _id: new ObjectId(id),
+          status: "confirmed",
         },
-      }
-    );
+        {
+          $set: {
+            status: "completed",
+            updatedAt: new Date(),
+          },
+        }
+      );
+
+    if (updateResult.modifiedCount !== 1) {
+      return res.status(409).json({
+        message:
+          "This booking has already been updated. Please refresh and try again.",
+      });
+    }
 
     return res.status(200).json({
       message: "Booking completed successfully.",
@@ -645,7 +716,9 @@ router.patch("/:id/cancel", async (req, res) => {
     }
 
     const db = await connectDB();
-    const bookingsCollection = db.collection("bookings");
+
+    const bookingsCollection =
+      db.collection("bookings");
 
     const booking = await bookingsCollection.findOne({
       _id: new ObjectId(id),
@@ -658,32 +731,45 @@ router.patch("/:id/cancel", async (req, res) => {
     }
 
     const isOwner =
-      String(booking.userId) === String(user.id || user._id) ||
+      String(booking.userId) ===
+        String(user.id || user._id) ||
       booking.userEmail === user.email;
 
     if (!isOwner) {
       return res.status(403).json({
-        message: "You cannot cancel another user's booking.",
+        message:
+          "You cannot cancel another user's booking.",
       });
     }
 
     if (booking.status !== "pending") {
       return res.status(400).json({
-        message: "Only pending bookings can be cancelled.",
+        message:
+          "Only pending bookings can be cancelled.",
       });
     }
 
-    await bookingsCollection.updateOne(
-      {
-        _id: new ObjectId(id),
-      },
-      {
-        $set: {
-          status: "cancelled",
-          updatedAt: new Date(),
+    // Atomic status update.
+    const updateResult =
+      await bookingsCollection.updateOne(
+        {
+          _id: new ObjectId(id),
+          status: "pending",
         },
-      }
-    );
+        {
+          $set: {
+            status: "cancelled",
+            updatedAt: new Date(),
+          },
+        }
+      );
+
+    if (updateResult.modifiedCount !== 1) {
+      return res.status(409).json({
+        message:
+          "This booking has already been updated. Please refresh and try again.",
+      });
+    }
 
     return res.status(200).json({
       message: "Booking cancelled successfully.",
