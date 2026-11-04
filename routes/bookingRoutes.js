@@ -1,58 +1,47 @@
+
 import express from "express";
 import { ObjectId } from "mongodb";
-
-import connectDB from "../db.js";
+import connectDB, { client } from "../db.js";
 import { auth } from "../auth.js";
 
 const router = express.Router();
 
 async function getCurrentUser(req) {
-  try {
-    const headers = new Headers();
+  const headers = new Headers();
 
-    if (req.headers.cookie) {
-      headers.set("cookie", req.headers.cookie);
-    }
-
-    if (req.headers.authorization) {
-      headers.set("authorization", req.headers.authorization);
-    }
-
-    const session = await auth.api.getSession({
-      headers,
-    });
-
-    return session?.user || null;
-  } catch (error) {
-    console.error("Failed to get current user:", error);
-    return null;
+  if (req.headers.cookie) {
+    headers.set("cookie", req.headers.cookie);
   }
+
+  if (req.headers.authorization) {
+    headers.set("authorization", req.headers.authorization);
+  }
+
+  const session = await auth.api.getSession({ headers });
+
+  return session?.user || null;
 }
 
-/*
-|--------------------------------------------------------------------------
-| Create booking
-|--------------------------------------------------------------------------
-*/
+// Create a new booking
 router.post("/", async (req, res) => {
   try {
     const user = await getCurrentUser(req);
 
     if (!user) {
       return res.status(401).json({
-        message: "You must be logged in to create a booking.",
+        message: "Unauthorized. Please login first.",
       });
     }
 
     const {
       studioId,
-      studioName,
       date,
       startTime,
       endTime,
       guests,
     } = req.body;
 
+    // Required field validation
     if (
       !studioId ||
       !date ||
@@ -61,105 +50,94 @@ router.post("/", async (req, res) => {
       guests === undefined
     ) {
       return res.status(400).json({
-        message:
-          "Studio, date, time, and guest information are required.",
+        message: "All booking fields are required.",
       });
     }
 
+    // Validate MongoDB ObjectId
     if (!ObjectId.isValid(studioId)) {
       return res.status(400).json({
         message: "Invalid studio ID.",
       });
     }
 
+    // Validate guests
     const guestCount = Number(guests);
 
-    if (!Number.isInteger(guestCount) || guestCount < 1) {
-      return res.status(400).json({
-        message: "Guest count must be at least 1.",
-      });
-    }
-
-    // Strict YYYY-MM-DD and HH:mm validation.
-    const dateMatch =
-      /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(date);
-
-    const timePattern =
-      /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/;
-
     if (
-      !dateMatch ||
-      !timePattern.test(startTime) ||
-      !timePattern.test(endTime)
+      !Number.isInteger(guestCount) ||
+      guestCount < 1
     ) {
       return res.status(400).json({
-        message:
-          "Date must use YYYY-MM-DD and time must use HH:mm format.",
+        message: "Guests must be a positive integer.",
       });
     }
 
-    const [, yearText, monthText, dayText] = dateMatch;
+    // Validate date format
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({
+        message: "Invalid date format. Use YYYY-MM-DD.",
+      });
+    }
 
-    const year = Number(yearText);
-    const month = Number(monthText);
-    const day = Number(dayText);
+    const bookingDate = new Date(`${date}T00:00:00`);
 
-    const dateCheck = new Date(
-      Date.UTC(year, month - 1, day)
-    );
-
-    // Reject impossible dates such as 2026-02-31.
     if (
-      dateCheck.getUTCFullYear() !== year ||
-      dateCheck.getUTCMonth() !== month - 1 ||
-      dateCheck.getUTCDate() !== day
+      Number.isNaN(bookingDate.getTime()) ||
+      bookingDate.toISOString().slice(0, 10) !== date
     ) {
       return res.status(400).json({
         message: "Invalid booking date.",
       });
     }
 
-    const bookingDate = new Date(
+    // Validate time format
+    const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+    if (
+      !timeRegex.test(startTime) ||
+      !timeRegex.test(endTime)
+    ) {
+      return res.status(400).json({
+        message: "Invalid time format. Use HH:mm.",
+      });
+    }
+
+    // Validate time range
+    if (endTime <= startTime) {
+      return res.status(400).json({
+        message: "End time must be after start time.",
+      });
+    }
+
+    // Validate future date and time
+    const now = new Date();
+    const requestedStart = new Date(
       `${date}T${startTime}:00`
     );
 
-    if (Number.isNaN(bookingDate.getTime())) {
+    if (requestedStart <= now) {
       return res.status(400).json({
-        message: "Invalid booking date or time.",
+        message: "Booking date and time must be in the future.",
       });
     }
 
-    if (bookingDate.getTime() <= Date.now()) {
-      return res.status(400).json({
-        message: "Booking time must be in the future.",
-      });
-    }
+    // Calculate duration
+    const [startHour, startMinute] = startTime
+      .split(":")
+      .map(Number);
 
-    const [startHour, startMinute] =
-      startTime.split(":").map(Number);
+    const [endHour, endMinute] = endTime
+      .split(":")
+      .map(Number);
 
-    const [endHour, endMinute] =
-      endTime.split(":").map(Number);
+    const startMinutes = startHour * 60 + startMinute;
+    const endMinutes = endHour * 60 + endMinute;
 
-    const startMinutes =
-      startHour * 60 + startMinute;
-
-    const endMinutes =
-      endHour * 60 + endMinute;
-
-    if (endMinutes <= startMinutes) {
-      return res.status(400).json({
-        message: "End time must be later than start time.",
-      });
-    }
-
-    const calculatedHours =
+    const totalHours =
       (endMinutes - startMinutes) / 60;
 
-    if (
-      !Number.isFinite(calculatedHours) ||
-      calculatedHours <= 0
-    ) {
+    if (totalHours <= 0) {
       return res.status(400).json({
         message: "Invalid booking duration.",
       });
@@ -167,13 +145,11 @@ router.post("/", async (req, res) => {
 
     const db = await connectDB();
 
-    const studiosCollection =
-      db.collection("studios");
+    const studiosCollection = db.collection("studios");
+    const bookingsCollection = db.collection("bookings");
+    const locksCollection = db.collection("bookingLocks");
 
-    const bookingsCollection =
-      db.collection("bookings");
-
-    // Find studio.
+    // Find studio
     const studio = await studiosCollection.findOne({
       _id: new ObjectId(studioId),
     });
@@ -184,185 +160,209 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Prevent booking own studio.
-    const isOwnStudio =
-      (studio.hostEmail &&
-        user.email &&
-        studio.hostEmail === user.email) ||
-      (studio.hostId &&
-        user.id &&
-        String(studio.hostId) === String(user.id));
+    // Prevent booking own studio
+    const isOwner =
+      studio.hostId?.toString() === user.id?.toString() ||
+      studio.hostEmail?.toLowerCase() ===
+        user.email?.toLowerCase();
 
-    if (isOwnStudio) {
-      return res.status(400).json({
+    if (isOwner) {
+      return res.status(403).json({
         message: "You cannot book your own studio.",
       });
     }
 
-    // Capacity validation.
-    const storedCapacity = Number(studio.maxCapacity);
+    // Check studio capacity
+    const capacity = Number(studio.capacity || 10);
 
-    const maxCapacity =
-      Number.isInteger(storedCapacity) &&
-      storedCapacity > 0
-        ? storedCapacity
-        : 10;
-
-    if (guestCount > maxCapacity) {
+    if (guestCount > capacity) {
       return res.status(400).json({
-        message: `This studio can accommodate a maximum of ${maxCapacity} guests.`,
+        message: `Maximum capacity is ${capacity} guests.`,
       });
     }
 
-    // Hourly price.
-    const rawPrice =
-      studio.pricePerHour ?? studio.price ?? 0;
+    // Calculate price on server
+    const pricePerHour = Number(
+      studio.pricePerHour ?? studio.price ?? 0
+    );
 
-    const pricePerHour = Number(rawPrice);
+    const securityDeposit = Number(
+      studio.securityDeposit ?? 0
+    );
 
     if (
       !Number.isFinite(pricePerHour) ||
-      pricePerHour <= 0
+      pricePerHour < 0 ||
+      !Number.isFinite(securityDeposit) ||
+      securityDeposit < 0
     ) {
       return res.status(400).json({
-        message:
-          "This studio does not have a valid hourly price.",
+        message: "Invalid studio pricing information.",
       });
     }
 
-    // Security deposit.
-    const securityDeposit = Math.max(
-      0,
-      Number(studio.securityDeposit) || 0
-    );
+    const totalPrice = totalHours * pricePerHour;
+    const totalAmount = totalPrice + securityDeposit;
 
-    // Calculate booking price on the server.
-    const totalPrice =
-      Math.round(
-        calculatedHours * pricePerHour * 100
-      ) / 100;
-
-    const totalAmount =
-      Math.round(
-        (totalPrice + securityDeposit) * 100
-      ) / 100;
-
-    /*
-    |--------------------------------------------------------------------------
-    | Prevent overlapping bookings
-    |--------------------------------------------------------------------------
-    */
-    const existingBooking =
-      await bookingsCollection.findOne({
-        studioId: new ObjectId(studioId),
-        date,
-        status: {
-          $in: ["pending", "confirmed"],
-        },
-        startTime: {
-          $lt: endTime,
-        },
-        endTime: {
-          $gt: startTime,
-        },
-      });
-
-    if (existingBooking) {
-      return res.status(409).json({
-        message:
-          "This studio is already booked for the selected time. Please choose another time.",
-      });
-    }
-
-    // Create booking.
+    // Booking data
     const booking = {
       studioId: new ObjectId(studioId),
+      studioName: studio.name || studio.title || "",
+      studioImage: studio.image || studio.imageUrl || "",
 
-      studioName:
-        studio.name || studioName || "Studio",
+      userId: user.id,
+      userName: user.name || "",
+      userEmail: user.email || "",
 
-      hostId: studio.hostId || null,
-      hostEmail: studio.hostEmail || null,
-
-      userId: user.id || user._id,
-      userEmail: user.email,
-      userName: user.name || user.email,
+      hostId: studio.hostId || "",
+      hostName: studio.hostName || "",
+      hostEmail: studio.hostEmail || "",
 
       date,
       startTime,
       endTime,
-
       guests: guestCount,
 
-      totalHours: calculatedHours,
-
-      // Studio rental price only.
-      price: totalPrice,
-
-      // Security deposit.
-      deposit: securityDeposit,
-
-      // Final amount.
+      totalHours,
+      pricePerHour,
+      totalPrice,
+      securityDeposit,
       totalAmount,
 
       status: "pending",
-
       createdAt: new Date(),
       updatedAt: new Date(),
     };
 
-    const result =
-      await bookingsCollection.insertOne(booking);
+    // Lock key for the same studio and date
+    const lockId = `${studioId}:${date}`;
+
+    // Ensure lock document exists
+    try {
+      await locksCollection.updateOne(
+        { _id: lockId },
+        {
+          $setOnInsert: {
+            createdAt: new Date(),
+          },
+        },
+        { upsert: true }
+      );
+    } catch (error) {
+      if (error.code !== 11000) {
+        throw error;
+      }
+    }
+
+    // Transaction prevents concurrent overlapping bookings
+    const session = client.startSession();
+
+    let createdBooking;
+
+    try {
+      await session.withTransaction(
+        async () => {
+          // Write to the same lock document.
+          // Concurrent transactions for this studio/date
+          // will conflict and be retried by MongoDB.
+          await locksCollection.updateOne(
+            { _id: lockId },
+            { $inc: { version: 1 } },
+            { session }
+          );
+
+          // Check overlapping bookings
+          const existingBooking =
+            await bookingsCollection.findOne(
+              {
+                studioId: new ObjectId(studioId),
+                date,
+                status: {
+                  $in: ["pending", "confirmed"],
+                },
+                startTime: {
+                  $lt: endTime,
+                },
+                endTime: {
+                  $gt: startTime,
+                },
+              },
+              { session }
+            );
+
+          if (existingBooking) {
+            const error = new Error(
+              "This studio is already booked for the selected time."
+            );
+
+            error.statusCode = 409;
+            throw error;
+          }
+
+          // Insert booking
+          const result = await bookingsCollection.insertOne(
+            booking,
+            { session }
+          );
+
+          createdBooking = {
+            ...booking,
+            _id: result.insertedId,
+          };
+        },
+        {
+          readConcern: { level: "snapshot" },
+          writeConcern: { w: "majority" },
+          readPreference: "primary",
+        }
+      );
+    } catch (error) {
+      if (error.statusCode === 409) {
+        return res.status(409).json({
+          message: error.message,
+        });
+      }
+
+      throw error;
+    } finally {
+      await session.endSession();
+    }
 
     return res.status(201).json({
       message: "Booking created successfully.",
-      booking: {
-        ...booking,
-        _id: result.insertedId,
-      },
+      booking: createdBooking,
     });
   } catch (error) {
     console.error("Create booking error:", error);
 
     return res.status(500).json({
-      message:
-        "Something went wrong while creating a booking.",
+      message: "Failed to create booking.",
     });
   }
 });
 
-/*
-|--------------------------------------------------------------------------
-| Get user's bookings
-|--------------------------------------------------------------------------
-*/
+// Get bookings of current user
 router.get("/my-bookings", async (req, res) => {
   try {
     const user = await getCurrentUser(req);
 
     if (!user) {
       return res.status(401).json({
-        message: "You must be logged in.",
+        message: "Unauthorized.",
       });
     }
 
     const db = await connectDB();
+    const bookingsCollection = db.collection("bookings");
 
-    const bookings = await db
-      .collection("bookings")
+    const bookings = await bookingsCollection
       .find({
         $or: [
-          {
-            userId: user.id || user._id,
-          },
-          {
-            userEmail: user.email,
-          },
+          { userId: user.id },
+          { userEmail: user.email },
         ],
       })
-      .sort({
-        createdAt: -1,
-      })
+      .sort({ createdAt: -1 })
       .toArray();
 
     return res.status(200).json(bookings);
@@ -370,43 +370,33 @@ router.get("/my-bookings", async (req, res) => {
     console.error("Get my bookings error:", error);
 
     return res.status(500).json({
-      message: "Failed to load bookings.",
+      message: "Failed to fetch bookings.",
     });
   }
 });
 
-/*
-|--------------------------------------------------------------------------
-| Get host bookings
-|--------------------------------------------------------------------------
-*/
+// Get bookings for host
 router.get("/host-bookings", async (req, res) => {
   try {
     const user = await getCurrentUser(req);
 
     if (!user) {
       return res.status(401).json({
-        message: "You must be logged in.",
+        message: "Unauthorized.",
       });
     }
 
     const db = await connectDB();
+    const bookingsCollection = db.collection("bookings");
 
-    const bookings = await db
-      .collection("bookings")
+    const bookings = await bookingsCollection
       .find({
         $or: [
-          {
-            hostId: user.id || user._id,
-          },
-          {
-            hostEmail: user.email,
-          },
+          { hostId: user.id },
+          { hostEmail: user.email },
         ],
       })
-      .sort({
-        createdAt: -1,
-      })
+      .sort({ createdAt: -1 })
       .toArray();
 
     return res.status(200).json(bookings);
@@ -414,41 +404,35 @@ router.get("/host-bookings", async (req, res) => {
     console.error("Get host bookings error:", error);
 
     return res.status(500).json({
-      message: "Failed to load host bookings.",
+      message: "Failed to fetch host bookings.",
     });
   }
 });
 
-/*
-|--------------------------------------------------------------------------
-| Confirm booking
-|--------------------------------------------------------------------------
-*/
+// Confirm booking
 router.patch("/:id/confirm", async (req, res) => {
   try {
     const user = await getCurrentUser(req);
 
     if (!user) {
       return res.status(401).json({
-        message: "You must be logged in.",
+        message: "Unauthorized.",
       });
     }
 
-    const { id } = req.params;
-
-    if (!ObjectId.isValid(id)) {
+    if (!ObjectId.isValid(req.params.id)) {
       return res.status(400).json({
         message: "Invalid booking ID.",
       });
     }
 
     const db = await connectDB();
+    const bookingsCollection = db.collection("bookings");
 
-    const bookingsCollection =
-      db.collection("bookings");
+    const bookingId = new ObjectId(req.params.id);
 
     const booking = await bookingsCollection.findOne({
-      _id: new ObjectId(id),
+      _id: bookingId,
     });
 
     if (!booking) {
@@ -458,43 +442,38 @@ router.patch("/:id/confirm", async (req, res) => {
     }
 
     const isHost =
-      String(booking.hostId) ===
-        String(user.id || user._id) ||
-      booking.hostEmail === user.email;
+      booking.hostId?.toString() === user.id?.toString() ||
+      booking.hostEmail?.toLowerCase() ===
+        user.email?.toLowerCase();
 
     if (!isHost) {
       return res.status(403).json({
-        message:
-          "You can only manage bookings for your own studios.",
+        message: "You are not allowed to confirm this booking.",
       });
     }
 
     if (booking.status !== "pending") {
       return res.status(400).json({
-        message:
-          "Only pending bookings can be confirmed.",
+        message: "Only pending bookings can be confirmed.",
       });
     }
 
-    // Atomic status update.
-    const updateResult =
-      await bookingsCollection.updateOne(
-        {
-          _id: new ObjectId(id),
-          status: "pending",
+    const result = await bookingsCollection.updateOne(
+      {
+        _id: bookingId,
+        status: "pending",
+      },
+      {
+        $set: {
+          status: "confirmed",
+          updatedAt: new Date(),
         },
-        {
-          $set: {
-            status: "confirmed",
-            updatedAt: new Date(),
-          },
-        }
-      );
+      }
+    );
 
-    if (updateResult.modifiedCount !== 1) {
+    if (result.modifiedCount !== 1) {
       return res.status(409).json({
-        message:
-          "This booking has already been updated. Please refresh and try again.",
+        message: "Booking status has already changed.",
       });
     }
 
@@ -510,36 +489,30 @@ router.patch("/:id/confirm", async (req, res) => {
   }
 });
 
-/*
-|--------------------------------------------------------------------------
-| Reject booking
-|--------------------------------------------------------------------------
-*/
+// Reject booking
 router.patch("/:id/reject", async (req, res) => {
   try {
     const user = await getCurrentUser(req);
 
     if (!user) {
       return res.status(401).json({
-        message: "You must be logged in.",
+        message: "Unauthorized.",
       });
     }
 
-    const { id } = req.params;
-
-    if (!ObjectId.isValid(id)) {
+    if (!ObjectId.isValid(req.params.id)) {
       return res.status(400).json({
         message: "Invalid booking ID.",
       });
     }
 
     const db = await connectDB();
+    const bookingsCollection = db.collection("bookings");
 
-    const bookingsCollection =
-      db.collection("bookings");
+    const bookingId = new ObjectId(req.params.id);
 
     const booking = await bookingsCollection.findOne({
-      _id: new ObjectId(id),
+      _id: bookingId,
     });
 
     if (!booking) {
@@ -549,43 +522,38 @@ router.patch("/:id/reject", async (req, res) => {
     }
 
     const isHost =
-      String(booking.hostId) ===
-        String(user.id || user._id) ||
-      booking.hostEmail === user.email;
+      booking.hostId?.toString() === user.id?.toString() ||
+      booking.hostEmail?.toLowerCase() ===
+        user.email?.toLowerCase();
 
     if (!isHost) {
       return res.status(403).json({
-        message:
-          "You can only manage bookings for your own studios.",
+        message: "You are not allowed to reject this booking.",
       });
     }
 
     if (booking.status !== "pending") {
       return res.status(400).json({
-        message:
-          "Only pending bookings can be rejected.",
+        message: "Only pending bookings can be rejected.",
       });
     }
 
-    // Atomic status update.
-    const updateResult =
-      await bookingsCollection.updateOne(
-        {
-          _id: new ObjectId(id),
-          status: "pending",
+    const result = await bookingsCollection.updateOne(
+      {
+        _id: bookingId,
+        status: "pending",
+      },
+      {
+        $set: {
+          status: "cancelled",
+          updatedAt: new Date(),
         },
-        {
-          $set: {
-            status: "cancelled",
-            updatedAt: new Date(),
-          },
-        }
-      );
+      }
+    );
 
-    if (updateResult.modifiedCount !== 1) {
+    if (result.modifiedCount !== 1) {
       return res.status(409).json({
-        message:
-          "This booking has already been updated. Please refresh and try again.",
+        message: "Booking status has already changed.",
       });
     }
 
@@ -601,36 +569,30 @@ router.patch("/:id/reject", async (req, res) => {
   }
 });
 
-/*
-|--------------------------------------------------------------------------
-| Complete booking
-|--------------------------------------------------------------------------
-*/
+// Complete booking
 router.patch("/:id/complete", async (req, res) => {
   try {
     const user = await getCurrentUser(req);
 
     if (!user) {
       return res.status(401).json({
-        message: "You must be logged in.",
+        message: "Unauthorized.",
       });
     }
 
-    const { id } = req.params;
-
-    if (!ObjectId.isValid(id)) {
+    if (!ObjectId.isValid(req.params.id)) {
       return res.status(400).json({
         message: "Invalid booking ID.",
       });
     }
 
     const db = await connectDB();
+    const bookingsCollection = db.collection("bookings");
 
-    const bookingsCollection =
-      db.collection("bookings");
+    const bookingId = new ObjectId(req.params.id);
 
     const booking = await bookingsCollection.findOne({
-      _id: new ObjectId(id),
+      _id: bookingId,
     });
 
     if (!booking) {
@@ -640,43 +602,38 @@ router.patch("/:id/complete", async (req, res) => {
     }
 
     const isHost =
-      String(booking.hostId) ===
-        String(user.id || user._id) ||
-      booking.hostEmail === user.email;
+      booking.hostId?.toString() === user.id?.toString() ||
+      booking.hostEmail?.toLowerCase() ===
+        user.email?.toLowerCase();
 
     if (!isHost) {
       return res.status(403).json({
-        message:
-          "You can only manage bookings for your own studios.",
+        message: "You are not allowed to complete this booking.",
       });
     }
 
     if (booking.status !== "confirmed") {
       return res.status(400).json({
-        message:
-          "Only confirmed bookings can be completed.",
+        message: "Only confirmed bookings can be completed.",
       });
     }
 
-    // Atomic status update.
-    const updateResult =
-      await bookingsCollection.updateOne(
-        {
-          _id: new ObjectId(id),
-          status: "confirmed",
+    const result = await bookingsCollection.updateOne(
+      {
+        _id: bookingId,
+        status: "confirmed",
+      },
+      {
+        $set: {
+          status: "completed",
+          updatedAt: new Date(),
         },
-        {
-          $set: {
-            status: "completed",
-            updatedAt: new Date(),
-          },
-        }
-      );
+      }
+    );
 
-    if (updateResult.modifiedCount !== 1) {
+    if (result.modifiedCount !== 1) {
       return res.status(409).json({
-        message:
-          "This booking has already been updated. Please refresh and try again.",
+        message: "Booking status has already changed.",
       });
     }
 
@@ -692,36 +649,30 @@ router.patch("/:id/complete", async (req, res) => {
   }
 });
 
-/*
-|--------------------------------------------------------------------------
-| Cancel booking
-|--------------------------------------------------------------------------
-*/
+// Cancel booking (customer)
 router.patch("/:id/cancel", async (req, res) => {
   try {
     const user = await getCurrentUser(req);
 
     if (!user) {
       return res.status(401).json({
-        message: "You must be logged in.",
+        message: "Unauthorized.",
       });
     }
 
-    const { id } = req.params;
-
-    if (!ObjectId.isValid(id)) {
+    if (!ObjectId.isValid(req.params.id)) {
       return res.status(400).json({
         message: "Invalid booking ID.",
       });
     }
 
     const db = await connectDB();
+    const bookingsCollection = db.collection("bookings");
 
-    const bookingsCollection =
-      db.collection("bookings");
+    const bookingId = new ObjectId(req.params.id);
 
     const booking = await bookingsCollection.findOne({
-      _id: new ObjectId(id),
+      _id: bookingId,
     });
 
     if (!booking) {
@@ -730,44 +681,39 @@ router.patch("/:id/cancel", async (req, res) => {
       });
     }
 
-    const isOwner =
-      String(booking.userId) ===
-        String(user.id || user._id) ||
-      booking.userEmail === user.email;
+    const isCustomer =
+      booking.userId?.toString() === user.id?.toString() ||
+      booking.userEmail?.toLowerCase() ===
+        user.email?.toLowerCase();
 
-    if (!isOwner) {
+    if (!isCustomer) {
       return res.status(403).json({
-        message:
-          "You cannot cancel another user's booking.",
+        message: "You are not allowed to cancel this booking.",
       });
     }
 
     if (booking.status !== "pending") {
       return res.status(400).json({
-        message:
-          "Only pending bookings can be cancelled.",
+        message: "Only pending bookings can be cancelled.",
       });
     }
 
-    // Atomic status update.
-    const updateResult =
-      await bookingsCollection.updateOne(
-        {
-          _id: new ObjectId(id),
-          status: "pending",
+    const result = await bookingsCollection.updateOne(
+      {
+        _id: bookingId,
+        status: "pending",
+      },
+      {
+        $set: {
+          status: "cancelled",
+          updatedAt: new Date(),
         },
-        {
-          $set: {
-            status: "cancelled",
-            updatedAt: new Date(),
-          },
-        }
-      );
+      }
+    );
 
-    if (updateResult.modifiedCount !== 1) {
+    if (result.modifiedCount !== 1) {
       return res.status(409).json({
-        message:
-          "This booking has already been updated. Please refresh and try again.",
+        message: "Booking status has already changed.",
       });
     }
 

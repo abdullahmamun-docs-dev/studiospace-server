@@ -88,9 +88,82 @@ app.get("/", (req, res) => {
   res.send("StudioSpace Server is running!");
 });
 
-// Connect database and start server
-await connectDB();
+// Connect database
+const db = await connectDB();
 
+// Collections
+const bookingsCollection = db.collection("bookings");
+const studiosCollection = db.collection("studios");
+
+// Create booking indexes
+await bookingsCollection.createIndexes([
+  {
+    key: {
+      studioId: 1,
+      date: 1,
+      status: 1,
+      startTime: 1,
+      endTime: 1,
+    },
+    name: "booking_overlap_lookup",
+  },
+  {
+    key: {
+      userId: 1,
+      createdAt: -1,
+    },
+    name: "user_bookings_lookup",
+  },
+  {
+    key: {
+      userEmail: 1,
+      createdAt: -1,
+    },
+    name: "user_email_bookings_lookup",
+  },
+  {
+    key: {
+      hostId: 1,
+      createdAt: -1,
+    },
+    name: "host_bookings_lookup",
+  },
+  {
+    key: {
+      hostEmail: 1,
+      createdAt: -1,
+    },
+    name: "host_email_bookings_lookup",
+  },
+]);
+
+// Create studio indexes
+await studiosCollection.createIndexes([
+  {
+    key: {
+      createdAt: -1,
+    },
+    name: "studios_created_at_lookup",
+  },
+  {
+    key: {
+      hostId: 1,
+      createdAt: -1,
+    },
+    name: "host_studios_lookup",
+  },
+  {
+    key: {
+      hostEmail: 1,
+      createdAt: -1,
+    },
+    name: "host_email_studios_lookup",
+  },
+]);
+
+console.log("MongoDB indexes created successfully!");
+
+// Start server
 app.listen(PORT, () => {
   console.log(`StudioSpace Server running on port ${PORT}`);
 });
