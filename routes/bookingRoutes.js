@@ -173,7 +173,9 @@ router.post("/", async (req, res) => {
     }
 
     // Check studio capacity
-    const capacity = Number(studio.capacity || 10);
+    const capacity = Number(
+           studio.maxCapacity ?? studio.capacity ?? 10
+         );
 
     if (guestCount > capacity) {
       return res.status(400).json({
