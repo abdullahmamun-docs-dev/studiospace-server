@@ -15,7 +15,7 @@
   ],
   "type": "module",
   "dependencies": {
-    "@better-auth/mongo-adapter": "^1.7.14",
+    "@better-auth/mongo-adapter": "^1.7.17",
     "better-auth": "^1.7.14",
     "cors": "^2.8.6",
     "dotenv": "^18.0.9",
