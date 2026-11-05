@@ -13,9 +13,13 @@ export const auth = betterAuth({
 
   baseURL: process.env.BETTER_AUTH_URL || "http://localhost:5000",
 
-  trustedOrigins: [
-    process.env.CLIENT_URL || "http://localhost:3000",
-  ],
+ trustedOrigins: [
+  process.env.CLIENT_URL,
+  "https://studiospace-client-lemon.vercel.app",
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3000",
+].filter(Boolean),
 
   emailAndPassword: {
     enabled: true,
