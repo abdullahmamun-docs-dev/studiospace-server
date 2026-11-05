@@ -22,14 +22,6 @@ export const auth = betterAuth({
     "http://127.0.0.1:3000",
   ].filter(Boolean),
 
-  advanced: {
-    useSecureCookies: true,
-    defaultCookieAttributes: {
-      sameSite: "none",
-      secure: true,
-    },
-  },
-
   emailAndPassword: {
     enabled: true,
   },
@@ -38,6 +30,21 @@ export const auth = betterAuth({
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    },
+  },
+
+  session: {
+    deferSessionRefresh: true,
+  },
+
+  advanced: {
+    useSecureCookies: true,
+
+    defaultCookieAttributes: {
+      httpOnly: true,
+      secure: true,
+      sameSite: "none",
+      path: "/",
     },
   },
 
