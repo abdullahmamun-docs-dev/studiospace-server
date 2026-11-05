@@ -375,10 +375,6 @@ router.patch("/:id", async (req, res) => {
       });
     }
 
-    /*
-     * Allow ownership through either hostId or hostEmail.
-     * This is important for older studio documents.
-     */
     if (!isStudioOwner(studio, session.user)) {
       return res.status(403).json({
         message: "You can only update your own studio.",
@@ -415,9 +411,6 @@ router.patch("/:id", async (req, res) => {
             .map((item) => item.trim())
         : [],
 
-      /*
-       * Backfill ownership information for legacy studios.
-       */
       hostId: session.user.id,
       hostName: session.user.name || studio.hostName || "",
       hostEmail:
@@ -426,9 +419,6 @@ router.patch("/:id", async (req, res) => {
       updatedAt: new Date(),
     };
 
-    /*
-     * New values are explicitly provided by the edit form.
-     */
     if (securityDeposit !== undefined) {
       updateData.securityDeposit = Number(
         securityDeposit
@@ -444,14 +434,35 @@ router.patch("/:id", async (req, res) => {
       updateData.maxCapacity = DEFAULT_MAX_CAPACITY;
     }
 
-    await db.collection("studios").updateOne(
+    /*
+     * Atomic ownership check.
+     *
+     * The update will only happen when:
+     * 1. The studio ID matches.
+     * 2. The current user owns the studio.
+     */
+    const result = await db.collection("studios").updateOne(
       {
         _id: studioObjectId,
+        $or: [
+          {
+            hostId: session.user.id,
+          },
+          {
+            hostEmail: session.user.email,
+          },
+        ],
       },
       {
         $set: updateData,
       }
     );
+
+    if (result.matchedCount !== 1) {
+      return res.status(403).json({
+        message: "You can only update your own studio.",
+      });
+    }
 
     return res.status(200).json({
       message: "Studio updated successfully.",
@@ -510,9 +521,6 @@ router.delete("/:id", async (req, res) => {
       });
     }
 
-    /*
-     * Allow legacy studios to be deleted through hostEmail.
-     */
     if (!isStudioOwner(studio, session.user)) {
       return res.status(403).json({
         message: "You can only delete your own studio.",
@@ -547,9 +555,14 @@ router.delete("/:id", async (req, res) => {
     }
 
     /*
-     * Delete only this exact studio and owner.
+     * Atomic ownership check.
+     *
+     * Delete only when both:
+     * 1. Studio ID matches.
+     * 2. Current user owns the studio.
      */
-    const ownerFilter = {
+    const result = await db.collection("studios").deleteOne({
+      _id: studioObjectId,
       $or: [
         {
           hostId: session.user.id,
@@ -558,16 +571,9 @@ router.delete("/:id", async (req, res) => {
           hostEmail: session.user.email,
         },
       ],
-    };
+    });
 
-    const result = await db
-      .collection("studios")
-      .deleteOne({
-        _id: studioObjectId,
-        ...ownerFilter,
-      });
-
-    if (result.deletedCount === 0) {
+    if (result.deletedCount !== 1) {
       return res.status(403).json({
         message: "You can only delete your own studio.",
       });
