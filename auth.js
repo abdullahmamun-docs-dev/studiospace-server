@@ -1,5 +1,7 @@
+
 import { betterAuth } from "better-auth";
 import { mongodbAdapter } from "@better-auth/mongo-adapter";
+import { jwt } from "better-auth/plugins";
 import connectDB from "./db.js";
 
 const db = await connectDB();
@@ -25,4 +27,8 @@ export const auth = betterAuth({
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     },
   },
+
+  plugins: [
+    jwt(),
+  ],
 });

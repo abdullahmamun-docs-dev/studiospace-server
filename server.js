@@ -3,6 +3,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { auth } from "./auth.js";
+import { toNodeHandler } from "better-auth/node";
 import connectDB from "./db.js";
 import studioRoutes from "./routes/studioRoutes.js";
 import bookingRoutes from "./routes/bookingRoutes.js";
@@ -10,6 +11,7 @@ import bookingRoutes from "./routes/bookingRoutes.js";
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Allowed frontend origins
 const allowedOrigins = [
   process.env.CLIENT_URL,
   "http://localhost:3000",
@@ -17,7 +19,7 @@ const allowedOrigins = [
   "http://127.0.0.1:3000",
 ].filter(Boolean);
 
-// CORS
+// CORS configuration
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -31,57 +33,16 @@ app.use(
   })
 );
 
-// Parse JSON requests
+// Better Auth handler
+// Keep this before express.json()
+app.all("/api/auth/*splat", toNodeHandler(auth));
+
+// Parse JSON requests for normal API routes
 app.use(express.json());
 
 // Normal API routes
 app.use("/api/studios", studioRoutes);
 app.use("/api/bookings", bookingRoutes);
-
-// Better Auth
-app.all("/api/auth/*splat", async (req, res) => {
-  try {
-    const url = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
-
-    const headers = new Headers();
-
-    for (const [key, value] of Object.entries(req.headers)) {
-      if (value !== undefined) {
-        headers.set(
-          key,
-          Array.isArray(value) ? value.join(", ") : value
-        );
-      }
-    }
-
-    const request = new Request(url, {
-      method: req.method,
-      headers,
-      body:
-        req.method === "GET" || req.method === "HEAD"
-          ? undefined
-          : JSON.stringify(req.body ?? {}),
-    });
-
-    const response = await auth.handler(request);
-
-    res.status(response.status);
-
-    response.headers.forEach((value, key) => {
-      res.setHeader(key, value);
-    });
-
-    const responseBody = await response.text();
-
-    res.send(responseBody);
-  } catch (error) {
-    console.error("Better Auth request failed:", error);
-
-    res.status(500).json({
-      message: "Authentication request failed",
-    });
-  }
-});
 
 // Test route
 app.get("/", (req, res) => {
