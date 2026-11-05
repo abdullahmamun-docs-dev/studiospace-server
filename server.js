@@ -1,4 +1,3 @@
-
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -11,53 +10,46 @@ import bookingRoutes from "./routes/bookingRoutes.js";
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Allowed frontend origins
 const allowedOrigins = [
   process.env.CLIENT_URL,
-   "https://studiospace-client-lemon.vercel.app",
+  "https://studiospace-client-lemon.vercel.app",
   "http://localhost:3000",
   "http://localhost:3001",
   "http://127.0.0.1:3000",
 ].filter(Boolean);
 
-// CORS configuration
 app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS blocked origin: ${origin}`));
       }
-
-      return callback(new Error(`CORS blocked origin: ${origin}`));
     },
     credentials: true,
   })
 );
 
-// Better Auth handler
-// Keep this before express.json()
+// Better Auth
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
-// Parse JSON requests for normal API routes
+// JSON
 app.use(express.json());
 
-// Normal API routes
+// API routes
 app.use("/api/studios", studioRoutes);
 app.use("/api/bookings", bookingRoutes);
 
-// Test route
 app.get("/", (req, res) => {
   res.send("StudioSpace Server is running!");
 });
 
-// Connect database
 const db = await connectDB();
 
-// Collections
 const bookingsCollection = db.collection("bookings");
 const studiosCollection = db.collection("studios");
 
-// Create booking indexes
 await bookingsCollection.createIndexes([
   {
     key: {
@@ -99,7 +91,6 @@ await bookingsCollection.createIndexes([
   },
 ]);
 
-// Create studio indexes
 await studiosCollection.createIndexes([
   {
     key: {
@@ -125,7 +116,6 @@ await studiosCollection.createIndexes([
 
 console.log("MongoDB indexes created successfully!");
 
-// Start server
 app.listen(PORT, () => {
   console.log(`StudioSpace Server running on port ${PORT}`);
 });
