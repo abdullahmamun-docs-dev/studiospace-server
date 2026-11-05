@@ -69,23 +69,32 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Validate date format
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return res.status(400).json({
-        message: "Invalid date format. Use YYYY-MM-DD.",
-      });
-    }
+   // Validate date format
+if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+  return res.status(400).json({
+    message: "Invalid date format. Use YYYY-MM-DD.",
+  });
+}
 
-    const bookingDate = new Date(`${date}T00:00:00`);
+// Validate calendar date without relying on server timezone
+const [year, month, day] = date.split("-").map(Number);
 
-    if (
-      Number.isNaN(bookingDate.getTime()) ||
-      bookingDate.toISOString().slice(0, 10) !== date
-    ) {
-      return res.status(400).json({
-        message: "Invalid booking date.",
-      });
-    }
+const bookingDate = new Date(
+  Date.UTC(year, month - 1, day)
+);
+
+const isValidCalendarDate =
+  bookingDate.getUTCFullYear() === year &&
+  bookingDate.getUTCMonth() === month - 1 &&
+  bookingDate.getUTCDate() === day;
+
+if (!isValidCalendarDate) {
+  return res.status(400).json({
+    message: "Invalid booking date.",
+  });
+}
+
+
 
     // Validate time format
     const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
