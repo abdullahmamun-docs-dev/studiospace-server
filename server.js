@@ -18,26 +18,41 @@ const allowedOrigins = [
   "http://127.0.0.1:3000",
 ].filter(Boolean);
 
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+
+  if (allowedOrigins.includes(origin)) {
+    return true;
+  }
+
+  try {
+    const url = new URL(origin);
+
+    return (
+      url.protocol === "https:" &&
+      url.hostname.endsWith(".vercel.app")
+    );
+  } catch {
+    return false;
+  }
+}
+
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error(`CORS blocked origin: ${origin}`));
+      if (isAllowedOrigin(origin)) {
+        return callback(null, true);
       }
+
+      return callback(new Error(`CORS blocked origin: ${origin}`));
     },
     credentials: true,
   })
 );
-
-// Better Auth
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
-// JSON
 app.use(express.json());
 
-// API routes
 app.use("/api/studios", studioRoutes);
 app.use("/api/bookings", bookingRoutes);
 
@@ -87,7 +102,7 @@ await bookingsCollection.createIndexes([
       hostEmail: 1,
       createdAt: -1,
     },
-    name: "host_email_bookings_lookup",
+    name: "host_email_studios_lookup",
   },
 ]);
 
