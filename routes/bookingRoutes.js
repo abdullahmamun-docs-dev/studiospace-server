@@ -1,4 +1,3 @@
-
 import express from "express";
 import { ObjectId } from "mongodb";
 import connectDB, { client } from "../db.js";
@@ -64,10 +63,7 @@ router.post("/", async (req, res) => {
     // Validate guests
     const guestCount = Number(guests);
 
-    if (
-      !Number.isInteger(guestCount) ||
-      guestCount < 1
-    ) {
+    if (!Number.isInteger(guestCount) || guestCount < 1) {
       return res.status(400).json({
         message: "Guests must be a positive integer.",
       });
@@ -94,10 +90,7 @@ router.post("/", async (req, res) => {
     // Validate time format
     const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-    if (
-      !timeRegex.test(startTime) ||
-      !timeRegex.test(endTime)
-    ) {
+    if (!timeRegex.test(startTime) || !timeRegex.test(endTime)) {
       return res.status(400).json({
         message: "Invalid time format. Use HH:mm.",
       });
@@ -112,9 +105,7 @@ router.post("/", async (req, res) => {
 
     // Validate future date and time
     const now = new Date();
-    const requestedStart = new Date(
-      `${date}T${startTime}:00`
-    );
+    const requestedStart = new Date(`${date}T${startTime}:00`);
 
     if (requestedStart <= now) {
       return res.status(400).json({
@@ -174,8 +165,8 @@ router.post("/", async (req, res) => {
 
     // Check studio capacity
     const capacity = Number(
-           studio.maxCapacity ?? studio.capacity ?? 10
-         );
+      studio.maxCapacity ?? studio.capacity ?? 10
+    );
 
     if (guestCount > capacity) {
       return res.status(400).json({
@@ -460,10 +451,15 @@ router.patch("/:id/confirm", async (req, res) => {
       });
     }
 
+    // Atomic ownership + status check
     const result = await bookingsCollection.updateOne(
       {
         _id: bookingId,
         status: "pending",
+        $or: [
+          { hostId: user.id },
+          { hostEmail: user.email },
+        ],
       },
       {
         $set: {
@@ -540,10 +536,15 @@ router.patch("/:id/reject", async (req, res) => {
       });
     }
 
+    // Atomic ownership + status check
     const result = await bookingsCollection.updateOne(
       {
         _id: bookingId,
         status: "pending",
+        $or: [
+          { hostId: user.id },
+          { hostEmail: user.email },
+        ],
       },
       {
         $set: {
@@ -620,10 +621,15 @@ router.patch("/:id/complete", async (req, res) => {
       });
     }
 
+    // Atomic ownership + status check
     const result = await bookingsCollection.updateOne(
       {
         _id: bookingId,
         status: "confirmed",
+        $or: [
+          { hostId: user.id },
+          { hostEmail: user.email },
+        ],
       },
       {
         $set: {
@@ -700,10 +706,15 @@ router.patch("/:id/cancel", async (req, res) => {
       });
     }
 
+    // Atomic ownership + status check
     const result = await bookingsCollection.updateOne(
       {
         _id: bookingId,
         status: "pending",
+        $or: [
+          { userId: user.id },
+          { userEmail: user.email },
+        ],
       },
       {
         $set: {
