@@ -1,3 +1,4 @@
+
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -49,6 +50,7 @@ app.use(
     credentials: true,
   })
 );
+
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
 app.use(express.json());
@@ -65,7 +67,42 @@ const db = await connectDB();
 const bookingsCollection = db.collection("bookings");
 const studiosCollection = db.collection("studios");
 
-await bookingsCollection.createIndexes([
+/*
+ * Create indexes safely.
+ *
+ * MongoDB can throw IndexOptionsConflict when an index with
+ * the same key pattern already exists under a different name.
+ * We check existing indexes first and only create missing ones.
+ */
+
+async function ensureIndexes(collection, indexes) {
+  const existingIndexes = await collection.listIndexes().toArray();
+
+  for (const index of indexes) {
+    const existingIndex = existingIndexes.find((existing) => {
+      return (
+        JSON.stringify(existing.key) === JSON.stringify(index.key)
+      );
+    });
+
+    if (existingIndex) {
+      console.log(
+        `Index already exists: ${collection.collectionName}.${existingIndex.name}`
+      );
+      continue;
+    }
+
+    await collection.createIndex(index.key, {
+      name: index.name,
+    });
+
+    console.log(
+      `Index created: ${collection.collectionName}.${index.name}`
+    );
+  }
+}
+
+await ensureIndexes(bookingsCollection, [
   {
     key: {
       studioId: 1,
@@ -106,7 +143,7 @@ await bookingsCollection.createIndexes([
   },
 ]);
 
-await studiosCollection.createIndexes([
+await ensureIndexes(studiosCollection, [
   {
     key: {
       createdAt: -1,
@@ -129,7 +166,7 @@ await studiosCollection.createIndexes([
   },
 ]);
 
-console.log("MongoDB indexes created successfully!");
+console.log("MongoDB indexes checked successfully!");
 
 app.listen(PORT, () => {
   console.log(`StudioSpace Server running on port ${PORT}`);
