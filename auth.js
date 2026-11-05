@@ -1,3 +1,4 @@
+
 import { betterAuth } from "better-auth";
 import { mongodbAdapter } from "@better-auth/mongo-adapter";
 import { jwt } from "better-auth/plugins";
@@ -16,7 +17,14 @@ export const auth = betterAuth({
 
   trustedOrigins: [
     process.env.CLIENT_URL,
+
+    // Production Vercel site
     "https://studiospace-client-lemon.vercel.app",
+
+    // Vercel preview deployments
+    "https://*.vercel.app",
+
+    // Local development
     "http://localhost:3000",
     "http://localhost:3001",
     "http://127.0.0.1:3000",
